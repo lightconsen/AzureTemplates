@@ -1,0 +1,231 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "type": "string"
+        },
+        "virtualMachineName": {
+            "type": "string"
+        },
+        "availabilitySetName": {
+            "type": "string",
+            "defaultValue": ""
+        },
+        "subnetId": {
+            "type": "string"
+        },
+        "staticIpAddress": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Leave this parameter empty if you want to use dynamic private IP address allocation"
+            }
+        },
+        "usePublicIp": {
+            "type": "bool",
+            "defaultValue": false
+        },
+        "publicIpId": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Leave this parameter empty if you want the template to create a fresh IP address when `usePublicIp` is `true`"
+            }
+        },
+        "ubuntuSku": {
+            "type": "string",
+            "defaultValue": "18.04-LTS",
+            "metadata": {
+                "description": "Ubuntu version. Defaults to 18.04 LTS"
+            }
+        },
+        "osDiskName": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Override OS disk name. For backward compatibility use only"
+            }
+        },
+        "osDiskType": {
+            "type": "string"
+        },
+        "dataDiskType": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Leave this parameter empty if you don't need a data disk"
+            }
+        },
+        "dataDiskSizeGb": {
+            "type": "int",
+            "defaultValue": 0,
+            "metadata": {
+                "description": "Leave this parameter empty if you don't need a data disk"
+            }
+        },
+        "virtualMachineSize": {
+            "type": "string"
+        },
+        "useAcceleratedNetworking": {
+            "type": "bool"
+        },
+        "adminUsername": {
+            "type": "string"
+        },
+        "adminPublicKey": {
+            "type": "secureString"
+        },
+        "customData": {
+            "type": "secureString",
+            "defaultValue": ""
+        }
+    },
+    "variables": {
+        "publicIpName": "[concat(parameters('virtualMachineName'), '-ip')]",
+        "networkInterfaceName": "[concat(parameters('virtualMachineName'), '-nic')]",
+        "osDiskName": "[concat(parameters('virtualMachineName'), '-osdisk')]",
+        "useDataDisk": "[not(equals(parameters('dataDiskSizeGb'), 0))]",
+        "dataDiskName": "[concat(parameters('virtualMachineName'), '-datadisk-0')]",
+        "dataDisks": [
+            {
+                "lun": 0,
+                "createOption": "Attach",
+                "caching": "None",
+                "writeAcceleratorEnabled": false,
+                "managedDisk": {
+                    "id": "[resourceId('Microsoft.Compute/disks', variables('dataDiskName'))]"
+                }
+            }
+        ],
+        "availabilitySet": {
+            "id": "[resourceId('Microsoft.Compute/availabilitySets', parameters('availabilitySetName'))]"
+        },
+        "publicIpAddress": {
+            "id": "[if(empty(parameters('publicIpId')), resourceId('Microsoft.Network/publicIPAddresses/', variables('publicIpName')), parameters('publicIpId'))]"
+        }
+    },
+    "resources": [
+        {
+            "condition": "[and(parameters('usePublicIp'), empty(parameters('publicIpId')))]",
+            "name": "[variables('publicIpName')]",
+            "type": "Microsoft.Network/publicIPAddresses",
+            "apiVersion": "2019-02-01",
+            "location": "[parameters('location')]",
+            "sku": {
+                "name": "Basic"
+            },
+            "properties": {
+                "publicIPAllocationMethod": "Static",
+                "idleTimeoutInMinutes": 4,
+                "publicIpAddressVersion": "IPv4",
+                "ipTags": [
+                ]
+            }
+        },
+        {
+            "name": "[variables('networkInterfaceName')]",
+            "type": "Microsoft.Network/networkInterfaces",
+            "apiVersion": "2019-07-01",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                "[variables('publicIpName')]"
+            ],
+            "properties": {
+                "enableAcceleratedNetworking": "[parameters('useAcceleratedNetworking')]",
+                "ipConfigurations": [
+                    {
+                        "name": "ipconfig1",
+                        "properties": {
+                            "subnet": {
+                                "id": "[parameters('subnetId')]"
+                            },
+                            "privateIPAddress": "[if(empty(parameters('staticIpAddress')), json('null'), parameters('staticIpAddress'))]",
+                            "privateIPAllocationMethod": "[if(empty(parameters('staticIpAddress')), 'Dynamic', 'Static')]",
+                            "publicIPAddress": "[if(parameters('usePublicIp'), variables('publicIpAddress'), json('null'))]"
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "condition": "[variables('useDataDisk')]",
+            "name": "[variables('dataDiskName')]",
+            "type": "Microsoft.Compute/disks",
+            "apiVersion": "2019-07-01",
+            "location": "[parameters('location')]",
+            "properties": {
+                "creationData": {
+                    "createOption": "Empty"
+                },
+                "diskSizeGB": "[parameters('dataDiskSizeGb')]"
+            },
+            "sku": {
+                "name": "[parameters('dataDiskType')]"
+            },
+            "tags": {
+            }
+        },
+        {
+            "name": "[parameters('virtualMachineName')]",
+            "type": "Microsoft.Compute/virtualMachines",
+            "apiVersion": "2019-07-01",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                "[concat('Microsoft.Compute/disks/', variables('dataDiskName'))]",
+                "[concat('Microsoft.Network/networkInterfaces/', variables('networkInterfaceName'))]"
+            ],
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": "[parameters('virtualMachineSize')]"
+                },
+                "storageProfile": {
+                    "imageReference": {
+                        "publisher": "Canonical",
+                        "offer": "UbuntuServer",
+                        "sku": "[parameters('ubuntuSku')]",
+                        "version": "latest"
+                    },
+                    "osDisk": {
+                        "name": "[if(empty(parameters('osDiskName')), variables('osDiskName'), parameters('osDiskName'))]",
+                        "createOption": "FromImage",
+                        "managedDisk": {
+                            "storageAccountType": "[parameters('osDiskType')]"
+                        }
+                    },
+                    "dataDisks": "[if(variables('useDataDisk'), variables('dataDisks'), json('null'))]"
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('networkInterfaceName'))]"
+                        }
+                    ]
+                },
+                "osProfile": {
+                    "computerName": "[parameters('virtualMachineName')]",
+                    "adminUsername": "[parameters('adminUsername')]",
+                    "linuxConfiguration": {
+                        "disablePasswordAuthentication": true,
+                        "ssh": {
+                            "publicKeys": [
+                                {
+                                    "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                                    "keyData": "[parameters('adminPublicKey')]"
+                                }
+                            ]
+                        }
+                    },
+                    "customData": "[if(empty(parameters('customData')), json('null'), parameters('customData'))]"
+                },
+                "availabilitySet": "[if(empty(parameters('availabilitySetName')), json('null'), variables('availabilitySet'))]"
+            }
+        }
+    ],
+    "outputs": {
+        "adminUsername": {
+            "type": "string",
+            "value": "[parameters('adminUsername')]"
+        }
+    }
+}
